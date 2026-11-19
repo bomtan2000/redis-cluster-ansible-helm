@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "redis.fullname" . }}-cluster-config
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    protected-mode no
+    port 6379
+
+    cluster-enabled yes
+    cluster-config-file /bitnami/redis/data/nodes.conf
+    cluster-node-timeout {{ .Values.cluster.nodeTimeout }}
+
+    dir /bitnami/redis/data
+
+    appendonly {{ ternary "yes" "no" .Values.redis.appendonly }}
+    appendfilename appendonly.aof
+    {{- range .Values.redis.save }}
+    save {{ . }}
+    {{- end }}
+
+    maxmemory {{ .Values.redis.maxmemory }}
+    maxmemory-policy {{ .Values.redis.maxmemoryPolicy }}
+
+    logfile ""
+    loglevel notice
+    {{- with .Values.redis.extraConfig }}
+    {{- . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "redis.fullname" . }}-scripts
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+data:
+  start.sh: |
+    {{- .Files.Get "scripts/start.sh" | nindent 4 }}
+  cluster-init.sh: |
+    {{- .Files.Get "scripts/cluster-init.sh" | nindent 4 }}

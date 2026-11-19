@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "redis.fullname" . }}
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ .Values.service.portName }}
+      port: {{ .Values.service.port }}
+      targetPort: 6379
+---
+# Cluster-mode clients (Lettuce) seed through this DNS name; publishNotReadyAddresses so
+# nodes can find each other on a simultaneous start, before readiness passes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "redis.headless" . }}
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+    - name: cluster
+      port: 16379
+      targetPort: 16379

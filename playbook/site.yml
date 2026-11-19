@@ -1,0 +1,177 @@
+---
+# Gather facts on every node first: maxmemory is computed from the node with the least RAM.
+- name: Gather facts for all Redis nodes
+  hosts: redis_cluster
+  gather_facts: yes
+  tasks: []
+
+- name: Prepare and deploy Redis cluster
+  hosts: redis_cluster
+  become: yes
+  gather_facts: no
+  # Live cluster: -e redis_serial=1 (one node at a time)
+  serial: "{{ redis_serial | default('100%') }}"
+  vars_files:
+    - group_vars/redis_cluster.yml
+  vars:
+    redis_min_memtotal_mb: >-
+      {{ groups['redis_cluster'] | map('extract', hostvars)
+         | selectattr('ansible_memtotal_mb', 'defined')
+         | map(attribute='ansible_memtotal_mb') | map('int') | min }}
+    redis_maxmemory_effective: >-
+      {{ redis_maxmemory if redis_maxmemory
+         else ((redis_min_memtotal_mb | int) * (redis_maxmemory_ratio | float)) | int | string + 'mb' }}
+    redis_io_threads_effective: >-
+      {{ redis_io_threads if redis_io_threads | string | length > 0
+         else (1 if ansible_processor_vcpus < 4
+               else [8, (ansible_processor_vcpus * 3 / 4) | int] | min) }}
+    redis_cli_env: "{{ {'REDISCLI_AUTH': redis_password} if redis_password else {} }}"
+
+  tasks:
+    - name: Update hosts file
+      lineinfile:
+        path: /etc/hosts
+        regexp: '\s{{ hostvars[item].hostname }}$'
+        line: "{{ hostvars[item].ansible_host }} {{ hostvars[item].hostname }}"
+        state: present
+      loop: "{{ groups['redis_cluster'] }}"
+
+    - name: Disable firewalld
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+
+    - name: Set SELinux to permissive in config
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=permissive'
+
+    - name: Apply permissive at runtime
+      command: setenforce 0
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Disable THP systemd unit
+      copy:
+        dest: /etc/systemd/system/disable-thp.service
+        content: |
+          [Unit]
+          Description=Disable Transparent Huge Pages (THP)
+          DefaultDependencies=no
+          After=sysinit.target local-fs.target
+          Before=redis.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+          ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=basic.target
+
+    - name: Enable THP disable service
+      systemd:
+        name: disable-thp
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Sysctl settings for Redis
+      copy:
+        dest: /etc/sysctl.d/99-redis.conf
+        content: |
+          vm.overcommit_memory = 1
+          # Keep Redis memory out of swap as much as possible (swap = latency spikes)
+          vm.swappiness = 1
+          net.core.somaxconn = 65535
+          net.ipv4.tcp_max_syn_backlog = 65535
+          net.core.netdev_max_backlog = 16384
+          fs.nr_open = 1048576
+      notify: reload sysctl
+
+    - name: Check installed Redis version
+      command: rpm -q --qf '%{VERSION}-%{RELEASE}' redis
+      register: rpm_q
+      changed_when: false
+      failed_when: false
+
+    - name: Copy Redis RPM to target
+      copy:
+        src: "artifacts/{{ redis_rpm }}"
+        dest: /tmp/redis.rpm
+        mode: '0644'
+      when: rpm_q.stdout != redis_rpm_nvr
+
+    - name: Install or upgrade Redis RPM
+      command: rpm -Uvh --nodeps /tmp/redis.rpm
+      when: rpm_q.stdout != redis_rpm_nvr
+      notify: restart redis
+
+    - name: Backup default redis.conf
+      copy:
+        src: /etc/redis/redis.conf
+        dest: /etc/redis/redis.conf.bak
+        remote_src: yes
+        force: no
+
+    - name: Deploy redis.conf
+      template:
+        src: templates/redis.conf.j2
+        dest: /etc/redis/redis.conf
+        owner: redis
+        group: root
+        mode: '0640'
+      notify: restart redis
+
+    - name: Systemd override for redis (fd limit, load timeout)
+      copy:
+        dest: /etc/systemd/system/redis.service.d/tuning.conf
+        content: |
+          [Service]
+          LimitNOFILE={{ redis_nofile }}
+          # Loading a large AOF takes longer than the 90s default
+          TimeoutStartSec=infinity
+          TimeoutStopSec=600
+      notify: restart redis
+
+    - name: Enable & start redis
+      systemd:
+        name: redis
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: reload sysctl
+      command: sysctl -p /etc/sysctl.d/99-redis.conf
+
+    - name: restart redis
+      systemd:
+        name: redis
+        state: restarted
+        daemon_reload: yes
+
+    - name: Wait until redis is serving
+      command: redis-cli -h 127.0.0.1 -p {{ redis_port }} ping
+      environment: "{{ redis_cli_env }}"
+      register: redis_ping
+      until: redis_ping.stdout == 'PONG'
+      retries: 120
+      delay: 5
+      changed_when: false
+      failed_when: false
+      listen: restart redis
+
+    - name: Wait until cluster is healthy again
+      command: redis-cli -h 127.0.0.1 -p {{ redis_port }} cluster info
+      environment: "{{ redis_cli_env }}"
+      register: redis_ci
+      # cluster_size:0 = cluster not created yet
+      until: "'cluster_state:ok' in redis_ci.stdout or 'cluster_size:0' in redis_ci.stdout"
+      retries: 60
+      delay: 5
+      changed_when: false
+      listen: restart redis

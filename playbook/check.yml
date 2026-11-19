@@ -1,0 +1,53 @@
+---
+- name: Validate Redis Cluster
+  hosts: redis_cluster
+  become: yes
+  gather_facts: no
+  vars_files:
+    - group_vars/redis_cluster.yml
+  vars:
+    redis_cli_env: "{{ {'REDISCLI_AUTH': redis_password} if redis_password else {} }}"
+
+  tasks:
+    - name: Check cluster info
+      command: redis-cli -h 127.0.0.1 -p {{ redis_port }} cluster info
+      environment: "{{ redis_cli_env }}"
+      register: cluster_info
+      changed_when: false
+      run_once: true
+
+    - name: Check slot coverage and replica placement
+      command: redis-cli --cluster check {{ ansible_host }}:{{ redis_port }}
+      environment: "{{ redis_cli_env }}"
+      register: cluster_check
+      changed_when: false
+      run_once: true
+
+    - name: Effective config per node
+      command: >-
+        redis-cli -h 127.0.0.1 -p {{ redis_port }}
+        config get {{ item }}
+      environment: "{{ redis_cli_env }}"
+      loop: [maxmemory, maxmemory-policy, maxclients, io-threads, appendonly, save]
+      register: cfg
+      changed_when: false
+
+    - name: Connections / memory per node
+      shell: >-
+        redis-cli -h 127.0.0.1 -p {{ redis_port }} info clients | grep -E 'connected_clients|blocked';
+        redis-cli -h 127.0.0.1 -p {{ redis_port }} info memory | grep -E 'used_memory_human|maxmemory_human|mem_fragmentation_ratio';
+        grep 'Max open files' /proc/$(pidof redis-server)/limits
+      environment: "{{ redis_cli_env }}"
+      register: stats
+      changed_when: false
+
+    - debug:
+        msg:
+          - "{{ cluster_info.stdout_lines }}"
+          - "{{ cluster_check.stdout_lines }}"
+      run_once: true
+
+    - debug:
+        msg:
+          - "{{ cfg.results | map(attribute='stdout_lines') | list }}"
+          - "{{ stats.stdout_lines }}"

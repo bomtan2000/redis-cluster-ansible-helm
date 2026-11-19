@@ -1,0 +1,1 @@
+Put redis-6.2.20-2.el9_7.x86_64.rpm here (see group_vars/redis_cluster.yml: redis_rpm). Not committed.

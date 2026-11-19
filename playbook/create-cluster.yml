@@ -1,0 +1,29 @@
+---
+# Form the cluster from the inventory; skipped if it already exists.
+- name: Create Redis Cluster
+  hosts: redis_cluster
+  become: yes
+  gather_facts: no
+  vars_files:
+    - group_vars/redis_cluster.yml
+  vars:
+    # REDISCLI_AUTH instead of -a so the password never shows up in ps
+    redis_cli_env: "{{ {'REDISCLI_AUTH': redis_password} if redis_password else {} }}"
+    redis_nodes: >-
+      {% for h in groups['redis_cluster'] %}{{ hostvars[h].ansible_host }}:{{ redis_port }} {% endfor %}
+
+  tasks:
+    - name: Check whether cluster already exists
+      command: redis-cli -h 127.0.0.1 -p {{ redis_port }} cluster info
+      environment: "{{ redis_cli_env }}"
+      register: cluster_info
+      changed_when: false
+      run_once: true
+
+    - name: Form the cluster
+      command: >-
+        redis-cli --cluster create {{ redis_nodes }}
+        --cluster-replicas {{ redis_replicas }} --cluster-yes
+      environment: "{{ redis_cli_env }}"
+      when: "'cluster_size:0' in cluster_info.stdout"
+      run_once: true

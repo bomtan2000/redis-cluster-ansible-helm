@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "redis.fullname" . }}
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  # selector / serviceName / podManagementPolicy / volumeClaimTemplates are immutable:
+  # they must match the existing cluster or Helm cannot adopt it.
+  serviceName: {{ include "redis.headless" . }}
+  replicas: {{ .Values.replicas }}
+  podManagementPolicy: Parallel
+  # Wait for failover (cluster-node-timeout) and replica sync before restarting the next pod.
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  selector:
+    matchLabels:
+      {{- include "redis.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        {{- include "redis.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      # A Service named `redis` makes k8s inject REDIS_PORT=tcp://... into every pod in the ns; turn it off here.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: {{ include "redis.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # start.sh fixes IPs in nodes.conf, then execs the bitnami entrypoint with
+          # --cluster-announce-ip $POD_IP (xem scripts/start.sh).
+          command: ["/bin/bash", "/scripts/start.sh"]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: REDIS_NODES
+              value: {{ include "redis.podNames" . | quote }}
+            - name: HEADLESS_DOMAIN
+              value: {{ include "redis.headlessDomain" . | quote }}
+            - name: DNS_WAIT_SECONDS
+              value: {{ .Values.cluster.dnsWaitSeconds | quote }}
+            - name: ALLOW_EMPTY_PASSWORD
+              value: "yes"
+            - name: REDIS_EXTRA_FLAGS
+              value: {{ .Values.redis.extraFlags | quote }}
+          ports:
+            - name: redis
+              containerPort: 6379
+            - name: cluster
+              containerPort: 16379
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: redis-data
+              mountPath: /bitnami/redis/data
+            - name: redis-config
+              mountPath: /opt/bitnami/redis/mounted-etc
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: redis-config
+          configMap:
+            name: {{ include "redis.fullname" . }}-cluster-config
+        - name: scripts
+          configMap:
+            name: {{ include "redis.fullname" . }}-scripts
+            defaultMode: 0755
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

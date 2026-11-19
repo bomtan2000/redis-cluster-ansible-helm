@@ -1,0 +1,86 @@
+# Defaults match the cluster this chart was written to adopt (previously applied with kubectl).
+# Resource names must stay the same (redis, redis-headless, redis-cluster-config)
+# so Helm can adopt the existing StatefulSet without deleting its PVCs.
+fullnameOverride: redis
+
+image:
+  # mirror of bitnami/redis in your private registry (air-gapped clusters)
+  repository: registry.example.local/bitnami/redis
+  tag: 8.6.3
+  pullPolicy: IfNotPresent
+
+# 6 pod = 3 master + 3 replica
+replicas: 6
+cluster:
+  replicasPerMaster: 1
+  nodeTimeout: 5000
+  # post-install Job runs `redis-cli --cluster create` when the cluster is empty.
+  # It skips itself if slots exist, so it is safe to keep on when adopting a live cluster.
+  init:
+    enabled: true
+  # Max seconds to wait for peer DNS at start (simultaneous start after a reboot).
+  dnsWaitSeconds: 60
+
+redis:
+  maxmemory: 2gb
+  maxmemoryPolicy: allkeys-lru
+  appendonly: true
+  save:
+    - "900 1"
+    - "300 10"
+    - "60 10000"
+  # Extra redis.conf lines, e.g. "cluster-require-full-coverage no"
+  extraConfig: ""
+  # Extra redis-server flags (bitnami REDIS_EXTRA_FLAGS)
+  extraFlags: ""
+
+service:
+  port: 6379
+  portName: db
+
+persistence:
+  size: 20Gi
+  # Empty = default StorageClass. volumeClaimTemplates is immutable: changing
+  # size/storageClass on an existing cluster makes helm upgrade fail.
+  storageClass: ""
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+startupProbe:
+  tcpSocket:
+    port: 6379
+  periodSeconds: 10
+  failureThreshold: 30
+livenessProbe:
+  tcpSocket:
+    port: 6379
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  tcpSocket:
+    port: 6379
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+# OpenShift assigns a random UID through the restricted SCC, so leave these empty there.
+podSecurityContext: {}
+containerSecurityContext: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 30
+# A pod must stay Ready this long before the rolling update moves to the next one.
+minReadySeconds: 20

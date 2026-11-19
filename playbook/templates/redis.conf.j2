@@ -1,0 +1,57 @@
+# {{ ansible_managed }}
+# Only values that differ from the Redis 6.2 defaults. RPM original: /etc/redis/redis.conf.bak
+
+# Network (node IP first: redis-shutdown uses the first bind address)
+bind {{ ansible_host }} 127.0.0.1
+port {{ redis_port }}
+tcp-backlog 65535
+tcp-keepalive 60
+timeout {{ redis_timeout }}
+maxclients {{ redis_maxclients }}
+
+pidfile /var/run/redis_{{ redis_port }}.pid
+logfile /var/log/redis/redis.log
+dir /var/lib/redis
+
+# Cluster
+cluster-enabled yes
+cluster-config-file nodes.conf
+cluster-node-timeout {{ redis_cluster_node_timeout }}
+cluster-require-full-coverage no
+
+{% if redis_password %}
+requirepass {{ redis_password }}
+masterauth {{ redis_password }}
+{% endif %}
+
+# Replication
+repl-diskless-sync yes
+repl-backlog-size {{ redis_repl_backlog_size }}
+client-output-buffer-limit replica {{ redis_replica_output_buffer }}
+
+# Memory
+maxmemory {{ redis_maxmemory_effective }}
+maxmemory-policy {{ redis_maxmemory_policy }}
+maxmemory-samples 10
+lazyfree-lazy-eviction yes
+lazyfree-lazy-expire yes
+lazyfree-lazy-server-del yes
+lazyfree-lazy-user-del yes
+replica-lazy-flush yes
+activedefrag yes
+
+# I/O threads
+io-threads {{ redis_io_threads_effective }}
+{% if redis_io_threads_effective | int > 1 %}
+io-threads-do-reads yes
+{% endif %}
+
+# Persistence: AOF only
+save {{ redis_rdb_save }}
+appendonly yes
+no-appendfsync-on-rewrite {{ 'no' if redis_maxmemory_policy == 'noeviction' else 'yes' }}
+auto-aof-rewrite-min-size 1gb
+
+# Observability
+slowlog-max-len 1024
+latency-monitor-threshold 100

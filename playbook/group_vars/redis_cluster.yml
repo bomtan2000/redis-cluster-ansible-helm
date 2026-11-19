@@ -1,0 +1,30 @@
+redis_port: 6379
+redis_cluster_port: 16379
+redis_replicas: 1
+redis_rpm: redis-6.2.20-2.el9_7.x86_64.rpm
+redis_rpm_nvr: "6.2.20-2.el9_7"
+
+# LAB VALUE. Change it and encrypt: ansible-vault encrypt_string '<pass>' --name redis_password
+# No spaces or quotes (redis-shutdown parses the config with awk).
+redis_password: "RedisLab123"
+
+# "" = auto: smallest node RAM x ratio. Or a fixed value, e.g. "36gb".
+redis_maxmemory: ""
+redis_maxmemory_ratio: 0.6
+# Cache: allkeys-lru. Primary data store: noeviction.
+redis_maxmemory_policy: allkeys-lru
+
+# "" = auto: <4 vCPU -> 1, otherwise 3/4 of vCPUs (max 8).
+redis_io_threads: ""
+
+# RDB off, AOF only.
+redis_rdb_save: '""'
+
+redis_cluster_node_timeout: 5000
+redis_repl_backlog_size: 512mb
+redis_replica_output_buffer: "2gb 1gb 300"
+
+# ~100k devices + 20% headroom. Each connection ~20 KB, counted inside maxmemory.
+redis_maxclients: 120000
+redis_nofile: 131072
+redis_timeout: 0

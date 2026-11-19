@@ -1,0 +1,11 @@
+# Air-gap packages are downloaded per environment, never committed (size + licensing)
+*.rpm
+*.tar
+*.tar.gz
+# Lab / OS noise
+.vagrant/
+.DS_Store
+._*
+logs/
+# CI workflow stays local, not pushed
+.github/*

@@ -1,0 +1,49 @@
+{{- if .Values.cluster.init.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "redis.fullname" . }}-cluster-init
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+  annotations:
+    # Runs on install only; the script skips itself if the cluster already has slots.
+    helm.sh/hook: post-install
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}-cluster-init
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: cluster-init
+          image: {{ include "redis.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/bash", "/scripts/cluster-init.sh"]
+          env:
+            - name: REDIS_NODES
+              value: {{ include "redis.podNames" . | quote }}
+            - name: HEADLESS_DOMAIN
+              value: {{ include "redis.headlessDomain" . | quote }}
+            - name: REPLICAS_PER_MASTER
+              value: {{ .Values.cluster.replicasPerMaster | quote }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "redis.fullname" . }}-scripts
+            defaultMode: 0755
+{{- end }}
